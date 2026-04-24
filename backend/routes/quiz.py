@@ -51,7 +51,9 @@ async def generate_quiz(body: Dict[str, Any]):
     if not doc_id:
         raise HTTPException(status_code=400, detail="doc_id is required.")
     if not vector_store.has_document(doc_id):
-        raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found.")
+        vector_store.ensure_loaded(doc_id)
+    if not vector_store.has_document(doc_id):
+        raise HTTPException(status_code=404, detail="Document not found. Please re-upload your file.")
 
     random.seed(seed)
     focus = random.choice(_FOCUS_AREAS)

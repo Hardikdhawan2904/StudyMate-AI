@@ -84,6 +84,27 @@ class FAISSVectorStore:
         """Kept for interface compatibility. Delegates to load_from_db."""
         self.load_from_db()
 
+    def ensure_loaded(self, doc_id: str) -> bool:
+        """Load a single document from DB on demand if not already in memory."""
+        if doc_id in self._embeddings:
+            return True
+        try:
+            from models import DocumentChunk, Document
+            db = self._get_session()
+            try:
+                rows = db.query(DocumentChunk).filter(DocumentChunk.doc_id == doc_id).all()
+                if not rows:
+                    return False
+                self._rebuild_cache_from_rows(rows)
+                doc = db.query(Document).filter(Document.doc_id == doc_id).first()
+                if doc and doc_id in self._doc_info:
+                    self._doc_info[doc_id]["name"] = doc.name
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[vector_store] ensure_loaded failed for {doc_id}: {e}")
+        return doc_id in self._embeddings
+
     # ── Write ──────────────────────────────────────────────────────────────────
 
     def add_document(

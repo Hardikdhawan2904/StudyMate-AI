@@ -386,16 +386,21 @@ export default function QuizPanel({ selectedDocId, documents, genJob, onGenerate
   const doc     = documents.find((d) => d.doc_id === selectedDocId);
   const hasDoc  = documents.length > 0;
 
-  // Sync result from background job into local quiz state
+  // Sync result from background job — use ref to fire toast only once per job
+  const lastNotifiedJobRef = useRef(null);
   useEffect(() => {
+    const jobKey = `${genJob?.status}_${genJob?.timestamp}`;
+    if (jobKey === lastNotifiedJobRef.current) return;
     if (genJob?.status === "done" && genJob.result) {
+      lastNotifiedJobRef.current = jobKey;
       setQuiz(genJob.result);
       toast.success(`${genJob.result.num_questions} questions ready!`);
     }
     if (genJob?.status === "error") {
+      lastNotifiedJobRef.current = jobKey;
       toast.error(genJob.error || "Quiz generation failed.");
     }
-  }, [genJob?.status]); // eslint-disable-line
+  }, [genJob?.status, genJob?.timestamp]); // eslint-disable-line
 
   const answeredCount = Object.keys(userAnswers).length;
   const correctCount  = quiz

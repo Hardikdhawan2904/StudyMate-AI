@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { generateFlashcards, saveFlashcardDeck, getFlashcardHistory, clearFlashcardHistory } from "../services/api";
 import toast from "react-hot-toast";
@@ -262,9 +262,13 @@ export default function FlashcardPanel({ selectedDocId, documents, genJob, onGen
       .finally(() => setHistoryLoading(false));
   }, []);
 
-  // Sync result from background job into local cards state
+  // Sync result from background job — use ref to fire toast only once per job
+  const lastNotifiedJobRef = useRef(null);
   useEffect(() => {
+    const jobKey = `${genJob?.status}_${genJob?.timestamp}`;
+    if (jobKey === lastNotifiedJobRef.current) return;
     if (genJob?.status === "done" && genJob.result?.flashcards) {
+      lastNotifiedJobRef.current = jobKey;
       const newCards = genJob.result.flashcards;
       setCards(newCards);
       toast.success(`${genJob.result.num_cards} flashcards ready!`);
@@ -287,9 +291,10 @@ export default function FlashcardPanel({ selectedDocId, documents, genJob, onGen
       }
     }
     if (genJob?.status === "error") {
+      lastNotifiedJobRef.current = jobKey;
       toast.error(genJob.error || "Generation failed.");
     }
-  }, [genJob?.status]); // eslint-disable-line
+  }, [genJob?.status, genJob?.timestamp]); // eslint-disable-line
 
   const handleGenerate = () => {
     if (!selectedDocId) { toast.error("Select a document first."); return; }

@@ -293,7 +293,7 @@ export default function Dashboard() {
       setNotifications((prev) => [{ id: Date.now(), type, docName, timestamp: Date.now(), read: false }, ...prev]);
     } catch (err) {
       const msg = err?.response?.data?.detail || "Generation failed.";
-      setGenJobs((prev) => ({ ...prev, [key]: { status: "error", error: msg, docName, type } }));
+      setGenJobs((prev) => ({ ...prev, [key]: { status: "error", error: msg, docName, type, timestamp: Date.now() } }));
       setNotifications((prev) => [{ id: Date.now(), type, docName, timestamp: Date.now(), read: false, error: true, msg }, ...prev]);
     }
   }, [documents]);
