@@ -4,8 +4,9 @@ Entry point: uvicorn main:app --reload
 """
 
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,7 +27,17 @@ app = FastAPI(
     title="StudyMate AI",
     description="AI-powered study assistant – upload notes and interact with them using RAG.",
     version="1.0.0",
+    root_path=os.getenv("API_ROOT_PATH", ""),
 )
+
+# Strip /_/backend prefix added by Vercel experimentalServices routing
+class StripPrefixMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/_/backend"):
+            request.scope["path"] = request.url.path[len("/_/backend"):]
+        return await call_next(request)
+
+app.add_middleware(StripPrefixMiddleware)
 
 # ── CORS ────────────────────────────────────────────────────────────────────
 origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
