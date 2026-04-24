@@ -13,9 +13,15 @@ from vector_db.faiss_store import vector_store
 from services import llm_service
 
 
-def index_document(doc_id: str, doc_name: str, file_bytes: bytes, filename: str) -> int:
+def index_document(
+    doc_id: str,
+    doc_name: str,
+    file_bytes: bytes,
+    filename: str,
+    user_id: int = 0,
+) -> int:
     """
-    Full pipeline: extract text → chunk → embed → store in FAISS.
+    Full pipeline: extract text -> chunk -> embed -> store in vector DB.
     Returns the number of chunks indexed.
     """
     text = process_file(filename, file_bytes)
@@ -24,7 +30,7 @@ def index_document(doc_id: str, doc_name: str, file_bytes: bytes, filename: str)
         raise ValueError("No text chunks could be extracted from the document.")
 
     embeddings = embedding_service.embed_texts(chunks)
-    vector_store.add_document(doc_id, doc_name, chunks, embeddings)
+    vector_store.add_document(doc_id, doc_name, chunks, embeddings, user_id=user_id)
     return len(chunks)
 
 
@@ -34,8 +40,8 @@ def query_document(
     k: int = 8,
 ) -> Tuple[str, List[str]]:
     """
-    RAG query: embed question → search FAISS → build context → ask LLM.
-    Works correctly for all document sizes — FAISS handles the heavy lifting.
+    RAG query: embed question -> search vector store -> build context -> ask LLM.
+    Works correctly for all document sizes.
     """
     query_embedding = embedding_service.embed_text(question)
     results = vector_store.search(query_embedding, k=k, doc_id=doc_id)

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, LargeBinary
 from sqlalchemy.sql import func
 from database import Base
 
@@ -26,6 +26,17 @@ class Document(Base):
     name       = Column(String, nullable=False)
     num_chunks = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    doc_id      = Column(String, nullable=False, index=True)
+    user_id     = Column(Integer, nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False)
+    chunk_text  = Column(Text, nullable=False)
+    embedding   = Column(LargeBinary, nullable=False)
 
 
 class ChatSession(Base):

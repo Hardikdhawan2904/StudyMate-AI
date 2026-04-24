@@ -51,10 +51,12 @@ def list_sessions(user_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/sessions/{session_id}")
-def get_session(session_id: int, db: Session = Depends(get_db)):
+def get_session(session_id: int, user_id: int = 0, db: Session = Depends(get_db)):
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if user_id and session.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
     messages = (
         db.query(ChatMessage)
         .filter(ChatMessage.session_id == session_id)

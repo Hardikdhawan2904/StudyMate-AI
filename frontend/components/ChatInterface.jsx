@@ -271,7 +271,7 @@ export default function ChatInterface({
       return;
     }
     if (sessionId === currentSessionId) return;
-    getChatSession(sessionId)
+    getChatSession(sessionId, userId)
       .then((data) => {
         setMessages(data.messages.length > 0 ? data.messages : [WELCOME]);
         setCurrentSessionId(sessionId);

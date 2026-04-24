@@ -1,25 +1,15 @@
 """
-Numpy Vector Store
-Replaces FAISS with pure-numpy cosine similarity — no C++ deps, Vercel-compatible.
-One .npy file per document for embeddings, one .json for chunks (same layout as before).
+Database-backed Vector Store
+Replaces file-based numpy storage with PostgreSQL/SQLite persistence via SQLAlchemy.
+All embeddings and chunks are stored in the document_chunks table.
+In-memory cache is rebuilt at startup from the database and kept in sync on writes.
 """
 
-import os
-import json
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 
-# Vercel's filesystem is read-only except /tmp
-if os.getenv("VERCEL"):
-    DATA_DIR = "/tmp/studymate_data"
-else:
-    DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
-INDEX_DIR  = os.path.join(DATA_DIR, "indexes")
-CHUNKS_DIR = os.path.join(DATA_DIR, "chunks")
-
-os.makedirs(INDEX_DIR,  exist_ok=True)
-os.makedirs(CHUNKS_DIR, exist_ok=True)
+EMBEDDING_DIM = 4096
 
 
 def _cosine_scores(query: np.ndarray, matrix: np.ndarray) -> np.ndarray:
@@ -29,73 +19,150 @@ def _cosine_scores(query: np.ndarray, matrix: np.ndarray) -> np.ndarray:
 
 
 class FAISSVectorStore:
-    """Drop-in replacement for the old FAISSVectorStore — identical public interface."""
+    """
+    Drop-in replacement for the old file-based FAISSVectorStore.
+    Persists all data to the relational database via the DocumentChunk model.
+    Keeps an in-memory cache for fast similarity search.
+    """
 
-    def __init__(self, embedding_dim: int = 4096):
+    def __init__(self, embedding_dim: int = EMBEDDING_DIM):
         self.embedding_dim = embedding_dim
         self._embeddings: Dict[str, np.ndarray] = {}
         self._chunks:     Dict[str, List[str]]  = {}
         self._doc_info:   Dict[str, dict]       = {}
 
-    # ── Paths ──────────────────────────────────────────────────────────────────
+    # ── DB helpers ─────────────────────────────────────────────────────────────
 
-    def _index_path(self, doc_id: str) -> str:
-        return os.path.join(INDEX_DIR, f"{doc_id}.npy")
+    def _get_session(self):
+        """Create a raw SQLAlchemy session (not the FastAPI dependency)."""
+        from database import SessionLocal
+        return SessionLocal()
 
-    def _chunks_path(self, doc_id: str) -> str:
-        return os.path.join(CHUNKS_DIR, f"{doc_id}.json")
+    def _rebuild_cache_from_rows(self, rows) -> None:
+        """Populate in-memory cache from a list of DocumentChunk ORM rows."""
+        bucket: Dict[str, List] = {}
+        for row in rows:
+            bucket.setdefault(row.doc_id, []).append(row)
+
+        for doc_id, doc_rows in bucket.items():
+            doc_rows.sort(key=lambda r: r.chunk_index)
+            chunks = [r.chunk_text for r in doc_rows]
+            # Each row stores a single chunk embedding as raw bytes
+            vecs = [
+                np.frombuffer(r.embedding, dtype=np.float32)
+                for r in doc_rows
+            ]
+            embeddings = np.stack(vecs, axis=0)  # shape (n_chunks, embedding_dim)
+            self._embeddings[doc_id] = embeddings
+            self._chunks[doc_id]     = chunks
+            self._doc_info[doc_id]   = {
+                "name":       doc_rows[0].doc_id,   # fallback; overwritten below
+                "num_chunks": len(chunks),
+            }
+
+    def load_from_db(self) -> None:
+        """Load all persisted chunks from the database into the in-memory cache."""
+        try:
+            from models import DocumentChunk, Document
+            db = self._get_session()
+            try:
+                chunk_rows = db.query(DocumentChunk).all()
+                self._rebuild_cache_from_rows(chunk_rows)
+
+                # Overlay correct document names from the documents table
+                doc_rows = db.query(Document).all()
+                for doc in doc_rows:
+                    if doc.doc_id in self._doc_info:
+                        self._doc_info[doc.doc_id]["name"] = doc.name
+            finally:
+                db.close()
+        except Exception as e:
+            # Never crash at import time — start with empty cache if DB is not ready
+            print(f"[vector_store] Warning: could not load from DB at startup: {e}")
+
+    def load_from_disk(self) -> None:
+        """Kept for interface compatibility. Delegates to load_from_db."""
+        self.load_from_db()
 
     # ── Write ──────────────────────────────────────────────────────────────────
 
-    def add_document(self, doc_id: str, doc_name: str, chunks: List[str], embeddings: np.ndarray) -> None:
+    def add_document(
+        self,
+        doc_id: str,
+        doc_name: str,
+        chunks: List[str],
+        embeddings: np.ndarray,
+        user_id: int = 0,
+    ) -> None:
         if embeddings.dtype != np.float32:
             embeddings = embeddings.astype(np.float32)
 
+        # Persist to database
+        try:
+            from models import DocumentChunk
+            db = self._get_session()
+            try:
+                # Remove stale rows for this doc_id so re-uploads are clean
+                db.query(DocumentChunk).filter(DocumentChunk.doc_id == doc_id).delete()
+
+                for idx, (chunk_text, vec) in enumerate(zip(chunks, embeddings)):
+                    row = DocumentChunk(
+                        doc_id      = doc_id,
+                        user_id     = user_id,
+                        chunk_index = idx,
+                        chunk_text  = chunk_text,
+                        embedding   = vec.tobytes(),
+                    )
+                    db.add(row)
+
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+        except Exception as e:
+            # Log but don't crash — still update memory cache so the session works
+            print(f"[vector_store] Warning: DB write failed for doc_id={doc_id}: {e}")
+
+        # Update in-memory cache
         self._embeddings[doc_id] = embeddings
         self._chunks[doc_id]     = chunks
         self._doc_info[doc_id]   = {"name": doc_name, "num_chunks": len(chunks)}
 
-        np.save(self._index_path(doc_id), embeddings)
-        with open(self._chunks_path(doc_id), "w", encoding="utf-8") as f:
-            json.dump({"name": doc_name, "chunks": chunks}, f, ensure_ascii=False)
-
     def delete_document(self, doc_id: str) -> bool:
         if doc_id not in self._embeddings:
             return False
-        del self._embeddings[doc_id]
-        del self._chunks[doc_id]
-        del self._doc_info[doc_id]
-        for path in (self._index_path(doc_id), self._chunks_path(doc_id)):
-            try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
-        return True
 
-    # ── Load from disk on startup ──────────────────────────────────────────────
-
-    def load_from_disk(self) -> None:
-        for fname in os.listdir(CHUNKS_DIR):
-            if not fname.endswith(".json"):
-                continue
-            doc_id      = fname[:-5]
-            index_path  = self._index_path(doc_id)
-            chunks_path = self._chunks_path(doc_id)
-            if not os.path.exists(index_path):
-                continue
+        # Remove from database
+        try:
+            from models import DocumentChunk
+            db = self._get_session()
             try:
-                embeddings = np.load(index_path)
-                with open(chunks_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                self._embeddings[doc_id] = embeddings
-                self._chunks[doc_id]     = data["chunks"]
-                self._doc_info[doc_id]   = {"name": data["name"], "num_chunks": len(data["chunks"])}
+                db.query(DocumentChunk).filter(DocumentChunk.doc_id == doc_id).delete()
+                db.commit()
             except Exception:
-                pass
+                db.rollback()
+                raise
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[vector_store] Warning: DB delete failed for doc_id={doc_id}: {e}")
+
+        # Remove from memory cache
+        self._embeddings.pop(doc_id, None)
+        self._chunks.pop(doc_id, None)
+        self._doc_info.pop(doc_id, None)
+        return True
 
     # ── Read ───────────────────────────────────────────────────────────────────
 
-    def search(self, query_embedding: np.ndarray, k: int = 5, doc_id: Optional[str] = None) -> List[Tuple[str, float, str]]:
+    def search(
+        self,
+        query_embedding: np.ndarray,
+        k: int = 5,
+        doc_id: Optional[str] = None,
+    ) -> List[Tuple[str, float, str]]:
         query   = query_embedding.flatten().astype(np.float32)
         results: List[Tuple[str, float, str]] = []
         targets = [doc_id] if doc_id else list(self._embeddings.keys())
@@ -132,6 +199,6 @@ class FAISSVectorStore:
         return len(self._embeddings)
 
 
-# Singleton
+# Singleton — load persisted data from DB at import time
 vector_store = FAISSVectorStore()
-vector_store.load_from_disk()
+vector_store.load_from_db()

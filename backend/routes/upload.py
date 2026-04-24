@@ -1,8 +1,8 @@
 """
 POST /api/upload
 Accepts a file (PDF / DOCX / TXT), extracts text, chunks it,
-generates embeddings, and stores them in the FAISS vector store.
-Document metadata is persisted to SQLite so it survives server restarts.
+generates embeddings, and stores them in the vector store (backed by the DB).
+Document metadata is persisted to the database so it survives server restarts.
 """
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Depends
@@ -13,7 +13,7 @@ from utils.helpers import generate_doc_id, allowed_file
 from services import rag_service
 from vector_db.faiss_store import vector_store
 from database import get_db
-from models import Document
+from models import Document, DocumentChunk
 
 router = APIRouter()
 
@@ -48,13 +48,14 @@ async def upload_file(
             doc_name=file.filename,
             file_bytes=file_bytes,
             filename=file.filename,
+            user_id=user_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
-    # Persist document metadata to SQLite
+    # Persist document metadata to the database
     db_doc = Document(doc_id=doc_id, user_id=user_id, name=file.filename, num_chunks=num_chunks)
     db.add(db_doc)
     db.commit()
@@ -74,15 +75,24 @@ async def list_documents(user_id: int = 0, db: Session = Depends(get_db)):
     rows = db.query(Document).filter(Document.user_id == user_id).order_by(Document.created_at.desc()).all()
     return {"documents": [
         {"doc_id": r.doc_id, "name": r.name, "num_chunks": r.num_chunks}
-        for r in rows if vector_store.has_document(r.doc_id)
+        for r in rows
     ]}
 
 
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str, db: Session = Depends(get_db)):
+    # Remove chunks from the document_chunks table
+    db.query(DocumentChunk).filter(DocumentChunk.doc_id == doc_id).delete()
+    db.commit()
+
+    # Remove from vector store memory cache (also deletes from document_chunks
+    # via its own DB session, but that is idempotent and harmless)
     deleted = vector_store.delete_document(doc_id)
+
+    # Remove the document metadata row
     db.query(Document).filter(Document.doc_id == doc_id).delete()
     db.commit()
+
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found.")
     return {"message": f"Document {doc_id} deleted successfully."}

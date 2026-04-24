@@ -21,8 +21,9 @@ groq>=0.8.0
 google-generativeai>=0.5.0
 openai>=1.10.0
 
-# Database (auth)
+# Database (auth + vector store)
 sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
 
 # Password hashing
 bcrypt>=4.0.0

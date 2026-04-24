@@ -60,8 +60,8 @@ export async function listChatSessions(user_id) {
   return res.data;
 }
 
-export async function getChatSession(session_id) {
-  const res = await api.get(`/api/chat/sessions/${session_id}`);
+export async function getChatSession(session_id, user_id) {
+  const res = await api.get(`/api/chat/sessions/${session_id}`, { params: { user_id } });
   return res.data;
 }
 
