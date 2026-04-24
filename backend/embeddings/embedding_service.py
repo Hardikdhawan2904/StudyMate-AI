@@ -1,32 +1,47 @@
-import os
+"""
+Embedding Service — Hash-based TF vectorizer (no API, no ML deps).
+Uses a hash trick to map tokens to a fixed-size vector. Fast and Vercel-safe.
+"""
+
+import re
 import numpy as np
 from typing import List
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from dotenv import load_dotenv
 
-load_dotenv()
+VOCAB_SIZE = 4096
 
-_client = GoogleGenerativeAIEmbeddings(
-    model="models/embedding-001",
-    google_api_key=os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", ""),
-)
+_STOPWORDS = {
+    "a","an","the","and","or","but","in","on","at","to","for","of","with",
+    "is","it","its","be","are","was","were","as","by","from","that","this",
+    "have","has","had","do","does","did","not","so","if","he","she","they",
+    "we","you","i","my","your","our","their","his","her","will","would",
+    "can","could","should","may","might","than","then","when","which","who",
+}
 
-EMBED_DIM = 768
+
+def _vectorize(text: str) -> np.ndarray:
+    tokens = re.findall(r"\b[a-z]{2,}\b", text.lower())
+    tokens = [t for t in tokens if t not in _STOPWORDS]
+    vec = np.zeros(VOCAB_SIZE, dtype=np.float32)
+    counts: dict = {}
+    for t in tokens:
+        counts[t] = counts.get(t, 0) + 1
+    for t, c in counts.items():
+        vec[hash(t) % VOCAB_SIZE] += c
+    total = vec.sum()
+    if total > 0:
+        vec /= total
+    return vec
 
 
 class EmbeddingService:
     def __init__(self):
-        self.embedding_dim = EMBED_DIM
+        self.embedding_dim = VOCAB_SIZE
 
     def embed_text(self, text: str) -> np.ndarray:
-        return np.array(_client.embed_query(text), dtype=np.float32)
+        return _vectorize(text)
 
     def embed_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
-        results = []
-        for i in range(0, len(texts), batch_size):
-            batch = _client.embed_documents(texts[i : i + batch_size])
-            results.extend(batch)
-        return np.array(results, dtype=np.float32)
+        return np.stack([_vectorize(t) for t in texts])
 
 
 embedding_service = EmbeddingService()

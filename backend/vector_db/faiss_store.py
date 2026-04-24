@@ -31,7 +31,7 @@ def _cosine_scores(query: np.ndarray, matrix: np.ndarray) -> np.ndarray:
 class FAISSVectorStore:
     """Drop-in replacement for the old FAISSVectorStore — identical public interface."""
 
-    def __init__(self, embedding_dim: int = 768):
+    def __init__(self, embedding_dim: int = 4096):
         self.embedding_dim = embedding_dim
         self._embeddings: Dict[str, np.ndarray] = {}
         self._chunks:     Dict[str, List[str]]  = {}
