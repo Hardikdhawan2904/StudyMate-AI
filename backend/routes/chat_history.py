@@ -45,7 +45,7 @@ def list_sessions(user_id: int, db: Session = Depends(get_db)):
         .all()
     )
     return [
-        {"id": s.id, "title": s.title, "doc_id": s.doc_id, "created_at": str(s.created_at)}
+        {"id": s.id, "title": s.title, "doc_id": s.doc_id, "created_at": s.created_at.isoformat() if s.created_at else ""}
         for s in sessions
     ]
 

@@ -277,7 +277,11 @@ export default function ChatInterface({
         setCurrentSessionId(sessionId);
         setSessionDocId(data.doc_id || null);
       })
-      .catch(() => toast.error("Could not load chat history."));
+      .catch(() => {
+        setMessages([WELCOME]);
+        setCurrentSessionId(null);
+        setSessionDocId(null);
+      });
   }, [sessionId]); // eslint-disable-line
 
   // Auto-generate topic overview when a new document is selected on a fresh chat
