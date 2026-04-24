@@ -69,15 +69,13 @@ async def upload_file(
 
 @router.get("/documents")
 async def list_documents(user_id: int = 0, db: Session = Depends(get_db)):
-    """List documents for a specific user (or all if user_id=0)."""
-    if user_id:
-        rows = db.query(Document).filter(Document.user_id == user_id).order_by(Document.created_at.desc()).all()
-        # Only return docs whose FAISS index is loaded (i.e., not corrupted)
-        return {"documents": [
-            {"doc_id": r.doc_id, "name": r.name, "num_chunks": r.num_chunks}
-            for r in rows if vector_store.has_document(r.doc_id)
-        ]}
-    return {"documents": vector_store.list_documents()}
+    if not user_id:
+        return {"documents": []}
+    rows = db.query(Document).filter(Document.user_id == user_id).order_by(Document.created_at.desc()).all()
+    return {"documents": [
+        {"doc_id": r.doc_id, "name": r.name, "num_chunks": r.num_chunks}
+        for r in rows if vector_store.has_document(r.doc_id)
+    ]}
 
 
 @router.delete("/documents/{doc_id}")
