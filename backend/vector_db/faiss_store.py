@@ -1,13 +1,12 @@
 """
-FAISS Vector Store
-Manages one FAISS index per uploaded document for efficient semantic search.
-Indexes and chunks are persisted to disk so they survive server restarts.
+Numpy Vector Store
+Replaces FAISS with pure-numpy cosine similarity — no C++ deps, Vercel-compatible.
+One .npy file per document for embeddings, one .json for chunks (same layout as before).
 """
 
 import os
 import json
 import numpy as np
-import faiss
 from typing import List, Dict, Tuple, Optional
 
 DATA_DIR   = os.path.join(os.path.dirname(__file__), "..", "data")
@@ -18,17 +17,25 @@ os.makedirs(INDEX_DIR,  exist_ok=True)
 os.makedirs(CHUNKS_DIR, exist_ok=True)
 
 
+def _cosine_scores(query: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    q_norm = query / (np.linalg.norm(query) + 1e-10)
+    norms  = np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-10
+    return (matrix / norms) @ q_norm
+
+
 class FAISSVectorStore:
-    def __init__(self, embedding_dim: int = 384):
+    """Drop-in replacement for the old FAISSVectorStore — identical public interface."""
+
+    def __init__(self, embedding_dim: int = 768):
         self.embedding_dim = embedding_dim
-        self._indexes:  Dict[str, faiss.Index] = {}
-        self._chunks:   Dict[str, List[str]]   = {}
-        self._doc_info: Dict[str, dict]        = {}
+        self._embeddings: Dict[str, np.ndarray] = {}
+        self._chunks:     Dict[str, List[str]]  = {}
+        self._doc_info:   Dict[str, dict]       = {}
 
     # ── Paths ──────────────────────────────────────────────────────────────────
 
     def _index_path(self, doc_id: str) -> str:
-        return os.path.join(INDEX_DIR, f"{doc_id}.index")
+        return os.path.join(INDEX_DIR, f"{doc_id}.npy")
 
     def _chunks_path(self, doc_id: str) -> str:
         return os.path.join(CHUNKS_DIR, f"{doc_id}.json")
@@ -39,86 +46,71 @@ class FAISSVectorStore:
         if embeddings.dtype != np.float32:
             embeddings = embeddings.astype(np.float32)
 
-        index = faiss.IndexFlatL2(self.embedding_dim)
-        index.add(embeddings)
+        self._embeddings[doc_id] = embeddings
+        self._chunks[doc_id]     = chunks
+        self._doc_info[doc_id]   = {"name": doc_name, "num_chunks": len(chunks)}
 
-        self._indexes[doc_id]  = index
-        self._chunks[doc_id]   = chunks
-        self._doc_info[doc_id] = {"name": doc_name, "num_chunks": len(chunks)}
-
-        # Persist to disk
-        faiss.write_index(index, self._index_path(doc_id))
+        np.save(self._index_path(doc_id), embeddings)
         with open(self._chunks_path(doc_id), "w", encoding="utf-8") as f:
             json.dump({"name": doc_name, "chunks": chunks}, f, ensure_ascii=False)
 
     def delete_document(self, doc_id: str) -> bool:
-        if doc_id not in self._indexes:
+        if doc_id not in self._embeddings:
             return False
-        del self._indexes[doc_id]
+        del self._embeddings[doc_id]
         del self._chunks[doc_id]
         del self._doc_info[doc_id]
-
-        # Remove from disk
-        try:
-            os.remove(self._index_path(doc_id))
-        except FileNotFoundError:
-            pass
-        try:
-            os.remove(self._chunks_path(doc_id))
-        except FileNotFoundError:
-            pass
+        for path in (self._index_path(doc_id), self._chunks_path(doc_id)):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
         return True
 
     # ── Load from disk on startup ──────────────────────────────────────────────
 
     def load_from_disk(self) -> None:
-        """Load all previously saved indexes into memory."""
         for fname in os.listdir(CHUNKS_DIR):
             if not fname.endswith(".json"):
                 continue
-            doc_id = fname[:-5]
+            doc_id      = fname[:-5]
             index_path  = self._index_path(doc_id)
             chunks_path = self._chunks_path(doc_id)
             if not os.path.exists(index_path):
                 continue
             try:
-                index = faiss.read_index(index_path)
+                embeddings = np.load(index_path)
                 with open(chunks_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                self._indexes[doc_id]  = index
-                self._chunks[doc_id]   = data["chunks"]
-                self._doc_info[doc_id] = {"name": data["name"], "num_chunks": len(data["chunks"])}
+                self._embeddings[doc_id] = embeddings
+                self._chunks[doc_id]     = data["chunks"]
+                self._doc_info[doc_id]   = {"name": data["name"], "num_chunks": len(data["chunks"])}
             except Exception:
-                pass  # skip corrupted files
+                pass
 
     # ── Read ───────────────────────────────────────────────────────────────────
 
     def search(self, query_embedding: np.ndarray, k: int = 5, doc_id: Optional[str] = None) -> List[Tuple[str, float, str]]:
-        if query_embedding.dtype != np.float32:
-            query_embedding = query_embedding.astype(np.float32)
-
-        query_vec = query_embedding.reshape(1, -1)
+        query   = query_embedding.flatten().astype(np.float32)
         results: List[Tuple[str, float, str]] = []
-        targets = [doc_id] if doc_id else list(self._indexes.keys())
+        targets = [doc_id] if doc_id else list(self._embeddings.keys())
 
         for did in targets:
-            if did not in self._indexes:
+            if did not in self._embeddings:
                 continue
-            index  = self._indexes[did]
+            matrix = self._embeddings[did]
             chunks = self._chunks[did]
-            actual_k = min(k, index.ntotal)
-            if actual_k == 0:
-                continue
-            distances, indices = index.search(query_vec, actual_k)
-            for dist, idx in zip(distances[0], indices[0]):
-                if idx != -1:
-                    results.append((chunks[idx], float(dist), did))
+            scores = _cosine_scores(query, matrix)
+            top_k  = min(k, len(chunks))
+            top_indices = np.argsort(scores)[::-1][:top_k]
+            for idx in top_indices:
+                results.append((chunks[idx], float(scores[idx]), did))
 
-        results.sort(key=lambda x: x[1])
+        results.sort(key=lambda x: x[1], reverse=True)
         return results[:k]
 
     def has_document(self, doc_id: str) -> bool:
-        return doc_id in self._indexes
+        return doc_id in self._embeddings
 
     def list_documents(self) -> List[dict]:
         return [{"doc_id": did, **info} for did, info in self._doc_info.items()]
@@ -132,9 +124,9 @@ class FAISSVectorStore:
         return self._chunks.get(doc_id, [])
 
     def total_documents(self) -> int:
-        return len(self._indexes)
+        return len(self._embeddings)
 
 
-# Singleton — load persisted data immediately on import
+# Singleton
 vector_store = FAISSVectorStore()
 vector_store.load_from_disk()

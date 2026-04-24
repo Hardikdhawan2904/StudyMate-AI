@@ -69,7 +69,7 @@ async def health():
         "status": "healthy",
         "documents_indexed": vector_store.total_documents(),
         "llm_provider": os.getenv("LLM_PROVIDER", "gemini"),
-        "embedding_model": os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+        "embedding_model": "text-embedding-004",
     }
 
 
