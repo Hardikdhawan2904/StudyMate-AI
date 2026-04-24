@@ -18,6 +18,7 @@ import bcrypt
 
 from database import get_db
 from models import User
+from utils.email import send_email
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -78,28 +79,6 @@ def make_otp() -> str:
     return str(secrets.randbelow(900000) + 100000)
 
 
-def _send_email(to: str, subject: str, html: str):
-    api_key = os.getenv("RESEND_API_KEY", "")
-    sender  = os.getenv("RESEND_FROM", "onboarding@resend.dev")
-
-    if not api_key:
-        print(f"[DEV EMAIL] To: {to}\nSubject: {subject}\n{html}")
-        return
-
-    try:
-        import resend
-        resend.api_key = api_key
-        result = resend.Emails.send({
-            "from":    sender,
-            "to":      [to],
-            "subject": subject,
-            "html":    html,
-        })
-        print(f"[Resend OK] id={result}")
-    except Exception as exc:
-        print(f"[Resend ERROR] {exc}")
-
-
 def send_otp_email(to: str, name: str, otp: str):
     html = f"""
     <div style="font-family:Inter,sans-serif;background:#030014;color:#e5e7eb;padding:40px;border-radius:16px;max-width:480px;margin:auto">
@@ -116,7 +95,7 @@ def send_otp_email(to: str, name: str, otp: str):
       <p style="color:#6b7280;font-size:12px;text-align:center">This code expires in <strong style="color:#9ca3af">10 minutes</strong>. If you didn't sign up, ignore this email.</p>
     </div>
     """
-    _send_email(to, "StudyMate AI — Email Verification Code", html)
+    send_email(to, "StudyMate AI — Email Verification Code", html)
 
 
 def send_reset_otp_email(to: str, name: str, otp: str):
@@ -135,7 +114,7 @@ def send_reset_otp_email(to: str, name: str, otp: str):
       <p style="color:#6b7280;font-size:12px;text-align:center">This code expires in <strong style="color:#9ca3af">10 minutes</strong>. If you didn't request this, ignore this email.</p>
     </div>
     """
-    _send_email(to, "StudyMate AI — Password Reset Code", html)
+    send_email(to, "StudyMate AI — Password Reset Code", html)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────

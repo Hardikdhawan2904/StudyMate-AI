@@ -9,7 +9,12 @@ import json
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 
-DATA_DIR   = os.path.join(os.path.dirname(__file__), "..", "data")
+# Vercel's filesystem is read-only except /tmp
+if os.getenv("VERCEL"):
+    DATA_DIR = "/tmp/studymate_data"
+else:
+    DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+
 INDEX_DIR  = os.path.join(DATA_DIR, "indexes")
 CHUNKS_DIR = os.path.join(DATA_DIR, "chunks")
 

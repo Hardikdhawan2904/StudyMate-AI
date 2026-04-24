@@ -2,21 +2,11 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
 import os
-import resend
+from utils.email import send_email
 
 router = APIRouter(prefix="/feedback", tags=["Feedback"])
 
-resend.api_key = os.getenv("RESEND_API_KEY", "")
-FEEDBACK_TO   = os.getenv("FEEDBACK_TO", "dhawanhardik180@gmail.com")
-RESEND_FROM   = os.getenv("RESEND_FROM", "onboarding@resend.dev")
-
-
-class FeedbackRequest(BaseModel):
-    name:    str
-    email:   Optional[str] = ""
-    type:    str            # "bug" | "suggestion" | "question" | "other"
-    message: str
-
+FEEDBACK_TO = os.getenv("FEEDBACK_TO", "dhawanhardik180@gmail.com")
 
 TYPE_LABELS = {
     "bug":        "Bug Report",
@@ -26,9 +16,16 @@ TYPE_LABELS = {
 }
 
 
+class FeedbackRequest(BaseModel):
+    name:    str
+    email:   Optional[str] = ""
+    type:    str
+    message: str
+
+
 @router.post("")
-def send_feedback(req: FeedbackRequest):
-    label = TYPE_LABELS.get(req.type, "Feedback")
+def submit_feedback(req: FeedbackRequest):
+    label   = TYPE_LABELS.get(req.type, "Feedback")
     subject = f"[StudyMate AI] {label} from {req.name}"
 
     html = f"""
@@ -64,14 +61,5 @@ def send_feedback(req: FeedbackRequest):
     </div>
     """
 
-    try:
-        resend.Emails.send({
-            "from":    RESEND_FROM,
-            "to":      [FEEDBACK_TO],
-            "subject": subject,
-            "html":    html,
-            "reply_to": req.email if req.email else None,
-        })
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    ok = send_email(FEEDBACK_TO, subject, html, reply_to=req.email or "")
+    return {"ok": ok}
